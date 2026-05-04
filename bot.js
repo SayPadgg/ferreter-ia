@@ -1,4 +1,8 @@
 import express from "express";
+import dotenv from "dotenv";
+import Groq from "groq-sdk";
+import fs from "fs";
+
 import makeWASocket, {
     useMultiFileAuthState,
     DisconnectReason,
@@ -8,18 +12,48 @@ import makeWASocket, {
 import P from "pino";
 import qrcode from "qrcode-terminal";
 
+dotenv.config();
+
+// =======================
+// IA (GROQ)
+// =======================
+const groq = new Groq({
+    apiKey: process.env.GROQ_API_KEY
+});
+
+const systemPrompt = fs.readFileSync("prompt.txt", "utf-8");
+
+async function askAI(message) {
+    const completion = await groq.chat.completions.create({
+        model: "llama3-70b-8192",
+        messages: [
+            {
+                role: "system",
+                content: systemPrompt
+            },
+            {
+                role: "user",
+                content: message
+            }
+        ]
+    });
+
+    return completion.choices[0].message.content;
+}
+
+// =======================
+// EXPRESS (Render stable)
+// =======================
 const app = express();
 const PORT = process.env.PORT || 10000;
 
 app.get("/", (req, res) => {
-    res.send("Bot de WhatsApp activo ✅");
+    res.send("Bot de WhatsApp activo con IA 🤖");
 });
 
-app.listen(PORT, () => {
-    console.log(`🌐 Servidor web activo en puerto ${PORT}`);
-    startBot(); // 👈 IMPORTANTE AQUÍ
-});
-
+// =======================
+// WHATSAPP BOT
+// =======================
 async function startBot() {
     const { state, saveCreds } = await useMultiFileAuthState("auth");
 
@@ -31,8 +65,10 @@ async function startBot() {
         logger: P({ level: "silent" })
     });
 
+    // guardar sesión
     sock.ev.on("creds.update", saveCreds);
 
+    // conexión
     sock.ev.on("connection.update", (update) => {
         const { connection, lastDisconnect, qr } = update;
 
@@ -55,6 +91,7 @@ async function startBot() {
         }
     });
 
+    // mensajes
     sock.ev.on("messages.upsert", async ({ messages }) => {
         const msg = messages[0];
 
@@ -72,10 +109,27 @@ async function startBot() {
 
         console.log("📩 Mensaje:", text);
 
-        if (text.toLowerCase() === "hola") {
+        try {
+            const response = await askAI(text);
+
             await sock.sendMessage(msg.key.remoteJid, {
-                text: "Hola 👋"
+                text: response
+            });
+
+        } catch (err) {
+            console.error("❌ Error IA:", err);
+
+            await sock.sendMessage(msg.key.remoteJid, {
+                text: "Hubo un error procesando tu mensaje 🤖"
             });
         }
     });
 }
+
+// =======================
+// START SERVER + BOT
+// =======================
+app.listen(PORT, () => {
+    console.log(`🌐 Servidor web activo en puerto ${PORT}`);
+    startBot();
+});
