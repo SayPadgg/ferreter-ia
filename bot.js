@@ -15,7 +15,7 @@ import qrcode from "qrcode-terminal";
 dotenv.config();
 
 // =======================
-// IA (GROQ)
+// IA GROQ
 // =======================
 const groq = new Groq({
     apiKey: process.env.GROQ_API_KEY
@@ -23,38 +23,65 @@ const groq = new Groq({
 
 const systemPrompt = fs.readFileSync("prompt.txt", "utf-8");
 
-async function askAI(message) {
+// 🧠 MEMORIA EN RAM
+const chatMemory = {};
+
+// IA con memoria
+async function askAI(userId, message) {
+
+    if (!chatMemory[userId]) {
+        chatMemory[userId] = [];
+    }
+
+    // guardar mensaje usuario
+    chatMemory[userId].push({
+        role: "user",
+        content: message
+    });
+
+    // limitar memoria (evita consumo infinito)
+    if (chatMemory[userId].length > 10) {
+        chatMemory[userId].shift();
+    }
+
     const completion = await groq.chat.completions.create({
         model: "llama-3.1-8b-instant",
         messages: [
-            {
-                role: "system",
-                content: systemPrompt
-            },
-            {
-                role: "user",
-                content: message
-            }
+            { role: "system", content: systemPrompt },
+            ...chatMemory[userId]
         ]
     });
 
-    return completion.choices[0].message.content;
+    const reply = completion.choices[0].message.content;
+
+    // guardar respuesta IA
+    chatMemory[userId].push({
+        role: "assistant",
+        content: reply
+    });
+
+    return reply;
 }
 
 // =======================
-// EXPRESS (Render stable)
+// EXPRESS (Render)
 // =======================
 const app = express();
 const PORT = process.env.PORT || 10000;
 
 app.get("/", (req, res) => {
-    res.send("Bot de WhatsApp activo con IA 🤖");
+    res.send("Bot de WhatsApp con IA activo 🤖");
+});
+
+app.listen(PORT, () => {
+    console.log(`🌐 Servidor activo en puerto ${PORT}`);
 });
 
 // =======================
-// WHATSAPP BOT
+// BOT WHATSAPP
 // =======================
 async function startBot() {
+
     const { state, saveCreds } = await useMultiFileAuthState("auth");
 
     const { version } = await fetchLatestBaileysVersion();
@@ -65,7 +92,6 @@ async function startBot() {
         logger: P({ level: "silent" })
     });
 
-    // guardar sesión
     sock.ev.on("creds.update", saveCreds);
 
     // conexión
@@ -93,6 +119,7 @@ async function startBot() {
 
     // mensajes
     sock.ev.on("messages.upsert", async ({ messages }) => {
+
         const msg = messages[0];
 
         if (!msg.message) return;
@@ -110,9 +137,12 @@ async function startBot() {
         console.log("📩 Mensaje:", text);
 
         try {
-            const response = await askAI(text);
 
-            await sock.sendMessage(msg.key.remoteJid, {
+            const userId = msg.key.remoteJid;
+
+            const response = await askAI(userId, text);
+
+            await sock.sendMessage(userId, {
                 text: response
             });
 
@@ -126,10 +156,4 @@ async function startBot() {
     });
 }
 
-// =======================
-// START SERVER + BOT
-// =======================
-app.listen(PORT, () => {
-    console.log(`🌐 Servidor web activo en puerto ${PORT}`);
-    startBot();
-});
+startBot();
