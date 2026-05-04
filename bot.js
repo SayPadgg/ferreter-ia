@@ -1,3 +1,4 @@
+import express from "express";
 import makeWASocket, {
     useMultiFileAuthState,
     DisconnectReason,
@@ -6,6 +7,18 @@ import makeWASocket, {
 
 import P from "pino";
 import qrcode from "qrcode-terminal";
+
+const app = express();
+const PORT = process.env.PORT || 10000;
+
+app.get("/", (req, res) => {
+    res.send("Bot de WhatsApp activo ✅");
+});
+
+app.listen(PORT, () => {
+    console.log(`🌐 Servidor web activo en puerto ${PORT}`);
+    startBot(); // 👈 IMPORTANTE AQUÍ
+});
 
 async function startBot() {
     const { state, saveCreds } = await useMultiFileAuthState("auth");
@@ -18,10 +31,8 @@ async function startBot() {
         logger: P({ level: "silent" })
     });
 
-    // guardar sesión
     sock.ev.on("creds.update", saveCreds);
 
-    // conexión + QR
     sock.ev.on("connection.update", (update) => {
         const { connection, lastDisconnect, qr } = update;
 
@@ -44,31 +55,27 @@ async function startBot() {
         }
     });
 
-    // mensajes
-sock.ev.on("messages.upsert", async ({ messages }) => {
-    const msg = messages[0];
+    sock.ev.on("messages.upsert", async ({ messages }) => {
+        const msg = messages[0];
 
-    // 🔴 filtrar basura
-    if (!msg.message) return;
-    if (msg.key?.remoteJid === "status@broadcast") return;
-    if (msg.key.fromMe) return;
+        if (!msg.message) return;
+        if (msg.key?.remoteJid === "status@broadcast") return;
+        if (msg.key.fromMe) return;
 
-    const text =
-        msg.message.conversation ||
-        msg.message.extendedTextMessage?.text ||
-        msg.message.imageMessage?.caption ||
-        msg.message.videoMessage?.caption;
+        const text =
+            msg.message.conversation ||
+            msg.message.extendedTextMessage?.text ||
+            msg.message.imageMessage?.caption ||
+            msg.message.videoMessage?.caption;
 
-    if (!text) return; // 👈 clave para eliminar undefined
+        if (!text) return;
 
-    console.log("📩 Mensaje:", text);
+        console.log("📩 Mensaje:", text);
 
-    if (text.toLowerCase() === "hola") {
-        await sock.sendMessage(msg.key.remoteJid, {
-            text: "Hola 👋"
-        });
-    }
-});
+        if (text.toLowerCase() === "hola") {
+            await sock.sendMessage(msg.key.remoteJid, {
+                text: "Hola 👋"
+            });
+        }
+    });
 }
-
-startBot();
