@@ -15,7 +15,7 @@ import qrcode from "qrcode-terminal";
 dotenv.config();
 
 // =======================
-// IA GROQ
+// IA
 // =======================
 const groq = new Groq({
     apiKey: process.env.GROQ_API_KEY
@@ -25,20 +25,13 @@ const systemPrompt = fs.readFileSync("prompt.txt", "utf-8");
 
 const chatMemory = {};
 
-// =======================
-// IA FUNCTION
-// =======================
 async function askAI(userId, message) {
 
-    if (!chatMemory[userId]) {
-        chatMemory[userId] = [];
-    }
+    if (!chatMemory[userId]) chatMemory[userId] = [];
 
     chatMemory[userId].push({ role: "user", content: message });
 
-    if (chatMemory[userId].length > 10) {
-        chatMemory[userId].shift();
-    }
+    if (chatMemory[userId].length > 10) chatMemory[userId].shift();
 
     const completion = await groq.chat.completions.create({
         model: "llama-3.1-8b-instant",
@@ -56,27 +49,24 @@ async function askAI(userId, message) {
 }
 
 // =======================
-// EXPRESS
+// EXPRESS (KEEP ALIVE BASE)
 // =======================
 const app = express();
 const PORT = process.env.PORT || 10000;
 
-app.get("/", (req, res) => {
+app.get("/", (_, res) => {
     res.send("Bot activo 🤖");
 });
 
 app.listen(PORT, () => {
-    console.log("🌐 Servidor en puerto", PORT);
+    console.log("🌐 Server running on", PORT);
 });
 
 // =======================
-// CONTROL RECONEXIÓN
+// BOT
 // =======================
-let isRestarting = false;
+let restarting = false;
 
-// =======================
-// BOT WHATSAPP
-// =======================
 async function startBot() {
 
     const { state, saveCreds } = await useMultiFileAuthState("auth");
@@ -85,13 +75,9 @@ async function startBot() {
     const sock = makeWASocket({
         version,
         auth: state,
-        logger: P({ level: "silent" }),
-        keepAliveIntervalMs: 30000
+        logger: P({ level: "silent" })
     });
 
-    // =======================
-    // GUARDAR SESIÓN (SOLO CUANDO CAMBIA)
-    // =======================
     sock.ev.on("creds.update", saveCreds);
 
     // =======================
@@ -108,25 +94,25 @@ async function startBot() {
 
         if (connection === "open") {
             console.log("✅ Bot conectado correctamente");
-            isRestarting = false;
+            restarting = false;
         }
 
         if (connection === "close") {
 
-            if (isRestarting) return;
-            isRestarting = true;
+            if (restarting) return;
+            restarting = true;
 
-            const statusCode = lastDisconnect?.error?.output?.statusCode;
+            const code = lastDisconnect?.error?.output?.statusCode;
 
             const shouldReconnect =
-                statusCode !== DisconnectReason.loggedOut;
+                code !== DisconnectReason.loggedOut;
 
-            console.log("🔁 Conexión cerrada. Reconectando:", shouldReconnect);
+            console.log("🔁 Reconectando:", shouldReconnect);
 
             if (shouldReconnect) {
                 setTimeout(() => {
                     startBot();
-                }, 15000); // 🔥 más estable, evita loop rápido
+                }, 10000);
             }
         }
     });
@@ -160,10 +146,6 @@ async function startBot() {
 
         } catch (err) {
             console.error("❌ Error IA:", err);
-
-            await sock.sendMessage(msg.key.remoteJid, {
-                text: "Hubo un error procesando tu mensaje 🤖"
-            });
         }
     });
 }
