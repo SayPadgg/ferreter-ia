@@ -4,7 +4,7 @@ import Groq from "groq-sdk";
 import fs from "fs";
 
 import makeWASocket, {
-    useMultiFileAuthState,
+    useSingleFileAuthState,
     DisconnectReason,
     fetchLatestBaileysVersion
 } from "@whiskeysockets/baileys";
@@ -33,13 +33,11 @@ async function askAI(userId, message) {
         chatMemory[userId] = [];
     }
 
-    // guardar mensaje usuario
     chatMemory[userId].push({
         role: "user",
         content: message
     });
 
-    // limitar memoria (evita consumo infinito)
     if (chatMemory[userId].length > 10) {
         chatMemory[userId].shift();
     }
@@ -54,7 +52,6 @@ async function askAI(userId, message) {
 
     const reply = completion.choices[0].message.content;
 
-    // guardar respuesta IA
     chatMemory[userId].push({
         role: "assistant",
         content: reply
@@ -80,9 +77,12 @@ app.listen(PORT, () => {
 // =======================
 // BOT WHATSAPP
 // =======================
+
+const SESSION_FILE = "./session.json";
+
 async function startBot() {
 
-    const { state, saveCreds } = await useMultiFileAuthState("auth");
+    const { state, saveState } = useSingleFileAuthState(SESSION_FILE);
 
     const { version } = await fetchLatestBaileysVersion();
 
@@ -92,7 +92,11 @@ async function startBot() {
         logger: P({ level: "silent" })
     });
 
-    sock.ev.on("creds.update", saveCreds);
+    // Guardar sesión automáticamente
+    sock.ev.on("creds.update", () => {
+        saveState();
+        console.log("💾 Sesión guardada en session.json");
+    });
 
     // conexión
     sock.ev.on("connection.update", (update) => {
