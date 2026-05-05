@@ -4,48 +4,18 @@ import Groq from "groq-sdk";
 import fs from "fs";
 
 import makeWASocket, {
-    fetchLatestBaileysVersion,
+    useMultiFileAuthState,
     DisconnectReason,
-    initAuthCreds,
-    BufferJSON
+    fetchLatestBaileysVersion
 } from "@whiskeysockets/baileys";
 
 import P from "pino";
 import qrcode from "qrcode-terminal";
 
-import { initializeApp } from "firebase/app";
-import { getDatabase, ref, set, get } from "firebase/database";
-
 dotenv.config();
 
 // =======================
-// FIREBASE CONFIG
-// =======================
-const firebaseConfig = {
-    apiKey: process.env.FIREBASE_API_KEY,
-    authDomain: process.env.FIREBASE_AUTH_DOMAIN,
-    databaseURL: process.env.FIREBASE_DB_URL,
-    projectId: process.env.FIREBASE_PROJECT_ID,
-};
-
-const firebaseApp = initializeApp(firebaseConfig);
-const db = getDatabase(firebaseApp);
-
-// guardar sesión
-async function saveSession(data) {
-    await set(ref(db, "baileys/session"), JSON.parse(JSON.stringify(data, BufferJSON.replacer)));
-}
-
-// cargar sesión
-async function loadSession() {
-    const snapshot = await get(ref(db, "baileys/session"));
-    return snapshot.exists()
-        ? JSON.parse(JSON.stringify(snapshot.val()), BufferJSON.reviver)
-        : null;
-}
-
-// =======================
-// GROQ IA
+// IA GROQ
 // =======================
 const groq = new Groq({
     apiKey: process.env.GROQ_API_KEY
@@ -53,15 +23,26 @@ const groq = new Groq({
 
 const systemPrompt = fs.readFileSync("prompt.txt", "utf-8");
 
-// memoria IA
+// memoria en RAM
 const chatMemory = {};
 
+// =======================
+// FUNCIÓN IA
+// =======================
 async function askAI(userId, message) {
-    if (!chatMemory[userId]) chatMemory[userId] = [];
 
-    chatMemory[userId].push({ role: "user", content: message });
+    if (!chatMemory[userId]) {
+        chatMemory[userId] = [];
+    }
 
-    if (chatMemory[userId].length > 10) chatMemory[userId].shift();
+    chatMemory[userId].push({
+        role: "user",
+        content: message
+    });
+
+    if (chatMemory[userId].length > 10) {
+        chatMemory[userId].shift();
+    }
 
     const completion = await groq.chat.completions.create({
         model: "llama-3.1-8b-instant",
@@ -73,63 +54,51 @@ async function askAI(userId, message) {
 
     const reply = completion.choices[0].message.content;
 
-    chatMemory[userId].push({ role: "assistant", content: reply });
+    chatMemory[userId].push({
+        role: "assistant",
+        content: reply
+    });
 
     return reply;
 }
 
 // =======================
-// EXPRESS
+// EXPRESS SERVER
 // =======================
 const app = express();
 const PORT = process.env.PORT || 10000;
 
 app.get("/", (req, res) => {
-    res.send("Bot activo 🤖");
+    res.send("Bot WhatsApp activo 🤖");
 });
 
 app.listen(PORT, () => {
-    console.log("🌐 Servidor en puerto", PORT);
+    console.log("🌐 Servidor corriendo en puerto", PORT);
 });
 
 // =======================
-// BOT WHATSAPP
+// WHATSAPP BOT
 // =======================
 async function startBot() {
 
-    let creds = await loadSession();
-
-    if (!creds) {
-        creds = initAuthCreds();
-        console.log("🆕 Nueva sesión creada (primera vez)");
-    } else {
-        console.log("♻️ Sesión cargada desde Firebase");
-    }
-
-    const state = {
-        creds,
-        keys: {
-            get: async () => ({}),
-            set: async () => {}
-        }
-    };
-
+    const { state, saveCreds } = await useMultiFileAuthState("auth");
     const { version } = await fetchLatestBaileysVersion();
 
     const sock = makeWASocket({
         version,
         auth: state,
-        logger: P({ level: "silent" })
+        logger: P({ level: "silent" }),
+        keepAliveIntervalMs: 30000
     });
 
-    // guardar sesión en Firebase cada cambio
-    sock.ev.on("creds.update", async () => {
-        await saveSession(state.creds);
-        console.log("💾 Sesión guardada en Firebase");
-    });
+    // guardar sesión
+    sock.ev.on("creds.update", saveCreds);
 
-    // conexión
+    // =======================
+    // CONEXIÓN
+    // =======================
     sock.ev.on("connection.update", (update) => {
+
         const { connection, lastDisconnect, qr } = update;
 
         if (qr) {
@@ -138,20 +107,34 @@ async function startBot() {
         }
 
         if (connection === "open") {
-            console.log("✅ Bot conectado");
+            console.log("✅ Bot conectado correctamente");
         }
 
         if (connection === "close") {
+
+            const statusCode = lastDisconnect?.error?.output?.statusCode;
+
             const shouldReconnect =
-                lastDisconnect?.error?.output?.statusCode !== DisconnectReason.loggedOut;
+                statusCode !== DisconnectReason.loggedOut;
 
             console.log("🔁 Reconectando:", shouldReconnect);
 
-            if (shouldReconnect) startBot();
+            if (shouldReconnect) {
+                setTimeout(() => startBot(), 5000);
+            }
         }
     });
 
-    // mensajes
+    // =======================
+    // KEEP ALIVE (ANTI SLEEP)
+    // =======================
+    setInterval(() => {
+        console.log("💓 keep alive");
+    }, 60000);
+
+    // =======================
+    // MENSAJES
+    // =======================
     sock.ev.on("messages.upsert", async ({ messages }) => {
 
         const msg = messages[0];
@@ -174,10 +157,16 @@ async function startBot() {
             const userId = msg.key.remoteJid;
             const response = await askAI(userId, text);
 
-            await sock.sendMessage(userId, { text: response });
+            await sock.sendMessage(userId, {
+                text: response
+            });
 
         } catch (err) {
             console.error("❌ Error IA:", err);
+
+            await sock.sendMessage(msg.key.remoteJid, {
+                text: "Hubo un error procesando tu mensaje 🤖"
+            });
         }
     });
 }
