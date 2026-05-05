@@ -23,11 +23,10 @@ const groq = new Groq({
 
 const systemPrompt = fs.readFileSync("prompt.txt", "utf-8");
 
-// memoria en RAM
 const chatMemory = {};
 
 // =======================
-// FUNCIÓN IA
+// IA FUNCTION
 // =======================
 async function askAI(userId, message) {
 
@@ -35,10 +34,7 @@ async function askAI(userId, message) {
         chatMemory[userId] = [];
     }
 
-    chatMemory[userId].push({
-        role: "user",
-        content: message
-    });
+    chatMemory[userId].push({ role: "user", content: message });
 
     if (chatMemory[userId].length > 10) {
         chatMemory[userId].shift();
@@ -54,30 +50,32 @@ async function askAI(userId, message) {
 
     const reply = completion.choices[0].message.content;
 
-    chatMemory[userId].push({
-        role: "assistant",
-        content: reply
-    });
+    chatMemory[userId].push({ role: "assistant", content: reply });
 
     return reply;
 }
 
 // =======================
-// EXPRESS SERVER
+// EXPRESS
 // =======================
 const app = express();
 const PORT = process.env.PORT || 10000;
 
 app.get("/", (req, res) => {
-    res.send("Bot WhatsApp activo 🤖");
+    res.send("Bot activo 🤖");
 });
 
 app.listen(PORT, () => {
-    console.log("🌐 Servidor corriendo en puerto", PORT);
+    console.log("🌐 Servidor en puerto", PORT);
 });
 
 // =======================
-// WHATSAPP BOT
+// CONTROL RECONEXIÓN
+// =======================
+let isRestarting = false;
+
+// =======================
+// BOT WHATSAPP
 // =======================
 async function startBot() {
 
@@ -91,7 +89,9 @@ async function startBot() {
         keepAliveIntervalMs: 30000
     });
 
-    // guardar sesión
+    // =======================
+    // GUARDAR SESIÓN (SOLO CUANDO CAMBIA)
+    // =======================
     sock.ev.on("creds.update", saveCreds);
 
     // =======================
@@ -108,29 +108,28 @@ async function startBot() {
 
         if (connection === "open") {
             console.log("✅ Bot conectado correctamente");
+            isRestarting = false;
         }
 
         if (connection === "close") {
+
+            if (isRestarting) return;
+            isRestarting = true;
 
             const statusCode = lastDisconnect?.error?.output?.statusCode;
 
             const shouldReconnect =
                 statusCode !== DisconnectReason.loggedOut;
 
-            console.log("🔁 Reconectando:", shouldReconnect);
+            console.log("🔁 Conexión cerrada. Reconectando:", shouldReconnect);
 
             if (shouldReconnect) {
-                setTimeout(() => startBot(), 5000);
+                setTimeout(() => {
+                    startBot();
+                }, 15000); // 🔥 más estable, evita loop rápido
             }
         }
     });
-
-    // =======================
-    // KEEP ALIVE (ANTI SLEEP)
-    // =======================
-    setInterval(() => {
-        console.log("💓 keep alive");
-    }, 60000);
 
     // =======================
     // MENSAJES
@@ -157,9 +156,7 @@ async function startBot() {
             const userId = msg.key.remoteJid;
             const response = await askAI(userId, text);
 
-            await sock.sendMessage(userId, {
-                text: response
-            });
+            await sock.sendMessage(userId, { text: response });
 
         } catch (err) {
             console.error("❌ Error IA:", err);
