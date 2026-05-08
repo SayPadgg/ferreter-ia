@@ -28,24 +28,37 @@ const systemPrompt = fs.readFileSync("prompt.txt", "utf-8");
 const chatMemory = {};
 
 // =======================
-// EXTRAER PRODUCTOS
+// EXTRACTOR IA DE PRODUCTOS
 // =======================
-function extraerProductos(texto) {
+async function extraerProductosConIA(texto) {
 
-    if (!texto) return [];
+    const res = await groq.chat.completions.create({
+        model: "llama-3.1-8b-instant",
+        messages: [
+            {
+                role: "system",
+                content:
+                    "Eres un extractor de productos de ferretería. " +
+                    "Devuelve SOLO una lista separada por comas de los productos mencionados. " +
+                    "Ejemplo: cemento, pintura, brocha. " +
+                    "No expliques nada."
+            },
+            {
+                role: "user",
+                content: texto
+            }
+        ]
+    });
 
-    const limpio = texto
+    return res.choices[0].message.content
         .toLowerCase()
-        .replace(/buscar|estoy buscando|quiero|necesito|por favor/g, "");
-
-    return limpio
-        .split(/,|y| e |\/|\n/)
+        .split(",")
         .map(p => p.trim())
         .filter(Boolean);
 }
 
 // =======================
-// IA
+// IA RESPUESTA FINAL
 // =======================
 async function askAI(userId, message, contextoInventario) {
 
@@ -140,6 +153,8 @@ async function startBot() {
             const shouldReconnect =
                 code !== DisconnectReason.loggedOut;
 
+            console.log("🔁 Reconectando:", shouldReconnect);
+
             if (shouldReconnect) {
                 setTimeout(() => startBot(), 10000);
             }
@@ -171,7 +186,10 @@ async function startBot() {
 
             const userId = msg.key.remoteJid;
 
-            const items = extraerProductos(text);
+            // 🔥 EXTRACCIÓN INTELIGENTE
+            const items = await extraerProductosConIA(text);
+
+            console.log("🔍 Productos detectados:", items);
 
             let resultadosAgrupados = [];
 
@@ -206,9 +224,12 @@ async function startBot() {
                 }
             }
 
-            const response = await askAI(userId, text, contextoInventario);
+            const response =
+                await askAI(userId, text, contextoInventario);
 
-            await sock.sendMessage(userId, { text: response });
+            await sock.sendMessage(userId, {
+                text: response
+            });
 
         } catch (err) {
             console.error("❌ Error:", err);
