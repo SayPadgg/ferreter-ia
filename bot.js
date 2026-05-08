@@ -1,86 +1,124 @@
-const { Client, LocalAuth } = require("whatsapp-web.js");
-const qrcode = require("qrcode-terminal");
+import makeWASocket, {
+    useMultiFileAuthState,
+    fetchLatestBaileysVersion,
+    DisconnectReason
+} from "@whiskeysockets/baileys";
 
-const { obtenerInventario } = require("./services/sheetsService");
-const { detectarMaterialesIA } = require("./services/aiService");
-const {
-    normalizarTexto,
-    singularizar
-} = require("./utils/text");
+import pino from "pino";
+import dotenv from "dotenv";
 
-const client = new Client({
-    authStrategy: new LocalAuth()
-});
+import { obtenerInventario } from "./services/sheetsService.js";
+import { detectarMaterialesIA } from "./services/aiservices.js";
+import { normalizarTexto, singularizar } from "./utils/text.js";
 
-client.on("qr", qr => {
-    qrcode.generate(qr, { small: true });
-});
+dotenv.config();
 
-client.on("ready", () => {
-    console.log("🤖 Bot conectado");
-});
+// =======================
+// BOT
+// =======================
+async function startBot() {
 
-client.on("message", async message => {
+    const { state, saveCreds } = await useMultiFileAuthState("auth");
+    const { version } = await fetchLatestBaileysVersion();
 
-    const texto = message.body.trim();
-    console.log("📩 Mensaje:", texto);
+    const sock = makeWASocket({
+        version,
+        auth: state,
+        logger: pino({ level: "silent" })
+    });
 
-    const inventario = await obtenerInventario();
+    sock.ev.on("creds.update", saveCreds);
 
-    // 🔥 DETECTAR PRODUCTOS (IA CONTROLADA)
-    const materiales = await detectarMaterialesIA(texto);
+    sock.ev.on("connection.update", (update) => {
 
-    console.log("🔍 Detectados:", materiales);
+        const { connection, lastDisconnect } = update;
 
-    // =========================
-    // SI HAY PRODUCTOS
-    // =========================
-    if (materiales.length > 0) {
+        if (connection === "open") {
+            console.log("🤖 Bot conectado correctamente");
+        }
 
-        for (const material of materiales) {
+        if (connection === "close") {
 
-            const matNorm =
-                singularizar(normalizarTexto(material));
+            const code = lastDisconnect?.error?.output?.statusCode;
+            const shouldReconnect = code !== DisconnectReason.loggedOut;
 
-            let variantes = inventario.filter(i => {
+            console.log("🔁 Reconectando:", shouldReconnect);
 
-                const prodNorm =
-                    singularizar(normalizarTexto(i.Producto || ""));
+            if (shouldReconnect) startBot();
+        }
+    });
 
-                return prodNorm.includes(matNorm);
-            });
+    // =======================
+    // MENSAJES
+    // =======================
+    sock.ev.on("messages.upsert", async ({ messages }) => {
 
-            if (variantes.length === 0) {
+        const msg = messages[0];
+        if (!msg.message) return;
+        if (msg.key.fromMe) return;
 
-                await message.reply(
-                    `❌ No encontré "${material}" en el inventario.`
-                );
+        const text =
+            msg.message.conversation ||
+            msg.message.extendedTextMessage?.text ||
+            msg.message.imageMessage?.caption;
 
-                continue;
-            }
+        if (!text) return;
 
-            let respuesta = `📌 Resultados para "${material}"\n\n`;
+        console.log("📩 Mensaje:", text);
 
-            variantes.forEach(item => {
+        const inventario = await obtenerInventario();
+        const materiales = await detectarMaterialesIA(text);
 
-                respuesta +=
+        console.log("🔍 Detectados:", materiales);
+
+        if (materiales.length > 0) {
+
+            for (const material of materiales) {
+
+                const matNorm = singularizar(normalizarTexto(material));
+
+                let variantes = inventario.filter(i => {
+
+                    const prodNorm = singularizar(
+                        normalizarTexto(i.Producto || "")
+                    );
+
+                    return prodNorm.includes(matNorm);
+                });
+
+                if (variantes.length === 0) {
+
+                    await sock.sendMessage(msg.key.remoteJid, {
+                        text: `❌ No encontré "${material}" en el inventario.`
+                    });
+
+                    continue;
+                }
+
+                let respuesta = `📌 Resultados para "${material}"\n\n`;
+
+                variantes.forEach(item => {
+
+                    respuesta +=
 `📦 ${item.Producto}
 💰 Precio: $${item.Precio}
 📊 Stock: ${item.StockSucursal1 || 0}
 
 `;
-            });
+                });
 
-            await message.reply(respuesta.trim());
+                await sock.sendMessage(msg.key.remoteJid, {
+                    text: respuesta.trim()
+                });
+            }
+
+            return;
         }
 
-        return;
-    }
+        await sock.sendMessage(msg.key.remoteJid, {
+            text: "¿En qué te puedo ayudar con materiales de ferretería?"
+        });
+    });
+}
 
-    // =========================
-    // SI NO HAY PRODUCTOS → IA NORMAL
-    // =========================
-    await message.reply("¿En qué te puedo ayudar con materiales de ferretería?");
-});
-
-client.initialize();
+startBot();
