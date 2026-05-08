@@ -14,32 +14,47 @@ export async function detectarMaterialesIA(texto) {
                 {
                     role: "system",
                     content: `
-Extrae SOLO materiales de ferretería.
+Eres un extractor de materiales de ferretería.
 
 REGLAS:
-- responde SOLO JSON
-- si no hay materiales: []
+- SOLO devuelve un array JSON válido
+- SIN texto adicional
+- SIN explicaciones
+- NO inventes productos
 
-Ejemplo:
-["cemento","pintura","brocha"]
+FORMATO:
+["cemento","pintura"]
+
+Si no hay materiales:
+[]
 `
                 },
                 {
                     role: "user",
                     content: texto
                 }
-            ]
+            ],
+            temperature: 0
         });
 
-        let content = res.choices[0].message.content
+        let content = res.choices[0].message.content;
+
+        // limpieza anti-errores
+        content = content
             .replace(/```json/g, "")
             .replace(/```/g, "")
+            .replace(/Respuesta:/g, "")
             .trim();
 
-        return JSON.parse(content);
+        // extraer SOLO el array real
+        const match = content.match(/\[[\s\S]*?\]/);
 
-    } catch (e) {
-        console.log("AI error:", e);
+        if (!match) return [];
+
+        return JSON.parse(match[0]);
+
+    } catch (err) {
+        console.log("AI error:", err);
         return [];
     }
 }

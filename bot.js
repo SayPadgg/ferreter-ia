@@ -14,9 +14,6 @@ import { normalizarTexto, singularizar } from "./utils/text.js";
 import dotenv from "dotenv";
 dotenv.config();
 
-// =======================
-// BOT STATE
-// =======================
 let restarting = false;
 
 async function startBot() {
@@ -32,9 +29,6 @@ async function startBot() {
 
     sock.ev.on("creds.update", saveCreds);
 
-    // =======================
-    // QR
-    // =======================
     sock.ev.on("connection.update", (update) => {
 
         const { connection, lastDisconnect, qr } = update;
@@ -46,16 +40,11 @@ async function startBot() {
 
         if (connection === "open") {
             console.log("✅ Bot conectado correctamente");
-            restarting = false;
         }
 
         if (connection === "close") {
 
-            if (restarting) return;
-            restarting = true;
-
             const code = lastDisconnect?.error?.output?.statusCode;
-
             const shouldReconnect = code !== DisconnectReason.loggedOut;
 
             console.log("🔁 Reconectando:", shouldReconnect);
@@ -66,14 +55,10 @@ async function startBot() {
         }
     });
 
-    // =======================
-    // MENSAJES
-    // =======================
     sock.ev.on("messages.upsert", async ({ messages }) => {
 
         const msg = messages[0];
-        if (!msg.message) return;
-        if (msg.key.fromMe) return;
+        if (!msg.message || msg.key.fromMe) return;
 
         const text =
             msg.message.conversation ||
@@ -86,34 +71,37 @@ async function startBot() {
         console.log("📩 Mensaje:", text);
 
         const inventario = await obtenerInventario();
-        const materiales = await detectarMaterialesIA(text);
 
-        console.log("🔍 Productos detectados:", materiales);
+        let materiales = await detectarMaterialesIA(text);
 
-        // =======================
-        // SI HAY PRODUCTOS
-        // =======================
-        if (materiales.length > 0) {
+        console.log("🔍 IA detectó:", materiales);
 
-            for (const material of materiales) {
+        // 🔥 FILTRO REAL CONTRA INVENTARIO
+        const inventarioNormalizado = inventario.map(i => ({
+            ...i,
+            norm: normalizarTexto(i.Producto || "")
+        }));
 
-                const matNorm = singularizar(normalizarTexto(material));
+        const materialesValidos = materiales.filter(m =>
+            inventarioNormalizado.some(i =>
+                i.norm.includes(normalizarTexto(m))
+            )
+        );
 
-                let resultados = inventario.filter(i => {
+        console.log("✅ Materiales válidos:", materialesValidos);
 
-                    const prodNorm = singularizar(
-                        normalizarTexto(i.Producto || "")
-                    );
+        // =========================
+        // SI HAY RESULTADOS
+        // =========================
+        if (materialesValidos.length > 0) {
 
-                    return prodNorm.includes(matNorm);
-                });
+            for (const material of materialesValidos) {
 
-                if (resultados.length === 0) {
-                    await sock.sendMessage(userId, {
-                        text: `❌ No encontré "${material}" en inventario`
-                    });
-                    continue;
-                }
+                const matNorm = normalizarTexto(material);
+
+                const resultados = inventario.filter(i =>
+                    normalizarTexto(i.Producto || "").includes(matNorm)
+                );
 
                 let reply = `📌 Resultados para "${material}"\n\n`;
 
@@ -125,17 +113,17 @@ async function startBot() {
 `;
                 });
 
-                await sock.sendMessage(userId, { text: reply.trim() });
+                await sock.sendMessage(userId, { text: reply });
             }
 
             return;
         }
 
-        // =======================
-        // MENSAJE NORMAL
-        // =======================
+        // =========================
+        // SI NO HAY MATERIAL
+        // =========================
         await sock.sendMessage(userId, {
-            text: "Hola 👋 dime qué material necesitas"
+            text: "Hola 👋 dime qué material necesitas de ferretería"
         });
     });
 }
