@@ -14,15 +14,14 @@ export async function detectarMaterialesIA(texto) {
                 {
                     role: "system",
                     content: `
-Extrae SOLO materiales mencionados por el usuario.
+Extrae SOLO materiales de ferretería.
 
 REGLAS:
-- NO inventes productos
-- NO generes listas largas
-- Si no hay productos reales responde: []
+- responde SOLO JSON
+- si no hay materiales: []
 
-FORMATO:
-["cemento","pintura"]
+Ejemplo:
+["cemento","pintura","brocha"]
 `
                 },
                 {
@@ -32,18 +31,15 @@ FORMATO:
             ]
         });
 
-        let content = res.choices[0].message.content;
-
-        content = content
+        let content = res.choices[0].message.content
             .replace(/```json/g, "")
             .replace(/```/g, "")
             .trim();
 
         return JSON.parse(content);
 
-    } catch (err) {
-
-        console.log("Error IA detectando:", err);
+    } catch (e) {
+        console.log("AI error:", e);
         return [];
     }
 }

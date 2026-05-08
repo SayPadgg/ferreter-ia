@@ -1,22 +1,16 @@
-const axios = require("axios");
+import axios from "axios";
 
-async function obtenerInventario() {
+export async function obtenerInventario() {
 
     try {
-
         const res = await axios.get(process.env.SHEET_URL);
 
         return Array.isArray(res.data)
             ? res.data
             : res.data?.data || [];
 
-    } catch (err) {
-
-        console.log("Error Sheets:", err);
+    } catch (e) {
+        console.log("Sheets error:", e);
         return [];
     }
 }
-
-module.exports = {
-    obtenerInventario
-};

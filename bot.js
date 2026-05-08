@@ -4,18 +4,21 @@ import makeWASocket, {
     DisconnectReason
 } from "@whiskeysockets/baileys";
 
-import pino from "pino";
-import dotenv from "dotenv";
+import P from "pino";
+import qrcode from "qrcode-terminal";
 
 import { obtenerInventario } from "./services/sheetsService.js";
 import { detectarMaterialesIA } from "./services/aiService.js";
 import { normalizarTexto, singularizar } from "./utils/text.js";
 
+import dotenv from "dotenv";
 dotenv.config();
 
 // =======================
-// BOT
+// BOT STATE
 // =======================
+let restarting = false;
+
 async function startBot() {
 
     const { state, saveCreds } = await useMultiFileAuthState("auth");
@@ -24,27 +27,42 @@ async function startBot() {
     const sock = makeWASocket({
         version,
         auth: state,
-        logger: pino({ level: "silent" })
+        logger: P({ level: "silent" })
     });
 
     sock.ev.on("creds.update", saveCreds);
 
+    // =======================
+    // QR
+    // =======================
     sock.ev.on("connection.update", (update) => {
 
-        const { connection, lastDisconnect } = update;
+        const { connection, lastDisconnect, qr } = update;
+
+        if (qr) {
+            console.log("📱 ESCANEA ESTE QR:");
+            qrcode.generate(qr, { small: true });
+        }
 
         if (connection === "open") {
-            console.log("🤖 Bot conectado correctamente");
+            console.log("✅ Bot conectado correctamente");
+            restarting = false;
         }
 
         if (connection === "close") {
 
+            if (restarting) return;
+            restarting = true;
+
             const code = lastDisconnect?.error?.output?.statusCode;
+
             const shouldReconnect = code !== DisconnectReason.loggedOut;
 
             console.log("🔁 Reconectando:", shouldReconnect);
 
-            if (shouldReconnect) startBot();
+            if (shouldReconnect) {
+                setTimeout(startBot, 5000);
+            }
         }
     });
 
@@ -60,24 +78,28 @@ async function startBot() {
         const text =
             msg.message.conversation ||
             msg.message.extendedTextMessage?.text ||
-            msg.message.imageMessage?.caption;
+            msg.message.imageMessage?.caption ||
+            "";
 
-        if (!text) return;
+        const userId = msg.key.remoteJid;
 
         console.log("📩 Mensaje:", text);
 
         const inventario = await obtenerInventario();
         const materiales = await detectarMaterialesIA(text);
 
-        console.log("🔍 Detectados:", materiales);
+        console.log("🔍 Productos detectados:", materiales);
 
+        // =======================
+        // SI HAY PRODUCTOS
+        // =======================
         if (materiales.length > 0) {
 
             for (const material of materiales) {
 
                 const matNorm = singularizar(normalizarTexto(material));
 
-                let variantes = inventario.filter(i => {
+                let resultados = inventario.filter(i => {
 
                     const prodNorm = singularizar(
                         normalizarTexto(i.Producto || "")
@@ -86,37 +108,34 @@ async function startBot() {
                     return prodNorm.includes(matNorm);
                 });
 
-                if (variantes.length === 0) {
-
-                    await sock.sendMessage(msg.key.remoteJid, {
-                        text: `❌ No encontré "${material}" en el inventario.`
+                if (resultados.length === 0) {
+                    await sock.sendMessage(userId, {
+                        text: `❌ No encontré "${material}" en inventario`
                     });
-
                     continue;
                 }
 
-                let respuesta = `📌 Resultados para "${material}"\n\n`;
+                let reply = `📌 Resultados para "${material}"\n\n`;
 
-                variantes.forEach(item => {
-
-                    respuesta +=
-`📦 ${item.Producto}
-💰 Precio: $${item.Precio}
-📊 Stock: ${item.StockSucursal1 || 0}
+                resultados.forEach(p => {
+                    reply += `📦 ${p.Producto}
+💰 $${p.Precio}
+📊 Stock: ${p.StockSucursal1 || 0}
 
 `;
                 });
 
-                await sock.sendMessage(msg.key.remoteJid, {
-                    text: respuesta.trim()
-                });
+                await sock.sendMessage(userId, { text: reply.trim() });
             }
 
             return;
         }
 
-        await sock.sendMessage(msg.key.remoteJid, {
-            text: "¿En qué te puedo ayudar con materiales de ferretería?"
+        // =======================
+        // MENSAJE NORMAL
+        // =======================
+        await sock.sendMessage(userId, {
+            text: "Hola 👋 dime qué material necesitas"
         });
     });
 }
