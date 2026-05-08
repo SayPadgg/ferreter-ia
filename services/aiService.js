@@ -1,10 +1,10 @@
-const Groq = require("groq-sdk");
+import Groq from "groq-sdk";
 
 const groq = new Groq({
     apiKey: process.env.GROQ_API_KEY
 });
 
-async function detectarMaterialesIA(texto) {
+export async function detectarMaterialesIA(texto) {
 
     try {
 
@@ -23,15 +23,6 @@ REGLAS:
 
 FORMATO:
 ["cemento","pintura"]
-
-Ejemplo:
-Usuario: "tienes cemento y pintura"
-Respuesta:
-["cemento","pintura"]
-
-Usuario: "hola"
-Respuesta:
-[]
 `
                 },
                 {
@@ -56,7 +47,3 @@ Respuesta:
         return [];
     }
 }
-
-module.exports = {
-    detectarMaterialesIA
-};
