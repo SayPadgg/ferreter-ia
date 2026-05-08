@@ -12,6 +12,8 @@ import makeWASocket, {
 import P from "pino";
 import qrcode from "qrcode-terminal";
 
+import { buscarProducto } from "./services/sheetsService.js";
+
 dotenv.config();
 
 // =======================
@@ -25,7 +27,27 @@ const systemPrompt = fs.readFileSync("prompt.txt", "utf-8");
 
 const chatMemory = {};
 
-async function askAI(userId, message) {
+// =======================
+// EXTRAER PRODUCTOS
+// =======================
+function extraerProductos(texto) {
+
+    if (!texto) return [];
+
+    const limpio = texto
+        .toLowerCase()
+        .replace(/buscar|estoy buscando|quiero|necesito|por favor/g, "");
+
+    return limpio
+        .split(/,|y| e |\/|\n/)
+        .map(p => p.trim())
+        .filter(Boolean);
+}
+
+// =======================
+// IA
+// =======================
+async function askAI(userId, message, contextoInventario) {
 
     if (!chatMemory[userId]) chatMemory[userId] = [];
 
@@ -36,7 +58,10 @@ async function askAI(userId, message) {
     const completion = await groq.chat.completions.create({
         model: "llama-3.1-8b-instant",
         messages: [
-            { role: "system", content: systemPrompt },
+            {
+                role: "system",
+                content: systemPrompt + "\n\n" + contextoInventario
+            },
             ...chatMemory[userId]
         ]
     });
@@ -69,8 +94,11 @@ let restarting = false;
 
 async function startBot() {
 
-    const { state, saveCreds } = await useMultiFileAuthState("auth");
-    const { version } = await fetchLatestBaileysVersion();
+    const { state, saveCreds } =
+        await useMultiFileAuthState("auth");
+
+    const { version } =
+        await fetchLatestBaileysVersion();
 
     const sock = makeWASocket({
         version,
@@ -85,7 +113,11 @@ async function startBot() {
     // =======================
     sock.ev.on("connection.update", (update) => {
 
-        const { connection, lastDisconnect, qr } = update;
+        const {
+            connection,
+            lastDisconnect,
+            qr
+        } = update;
 
         if (qr) {
             console.log("📱 ESCANEA ESTE QR:");
@@ -102,11 +134,11 @@ async function startBot() {
             if (restarting) return;
             restarting = true;
 
-            const code = lastDisconnect?.error?.output?.statusCode;
+            const code =
+                lastDisconnect?.error?.output?.statusCode;
 
-            const shouldReconnect = code !== DisconnectReason.loggedOut;
-
-            console.log("🔁 Reconectando:", shouldReconnect);
+            const shouldReconnect =
+                code !== DisconnectReason.loggedOut;
 
             if (shouldReconnect) {
                 setTimeout(() => startBot(), 10000);
@@ -138,12 +170,48 @@ async function startBot() {
         try {
 
             const userId = msg.key.remoteJid;
-            const response = await askAI(userId, text);
+
+            const items = extraerProductos(text);
+
+            let resultadosAgrupados = [];
+
+            for (const item of items) {
+
+                const resultados = await buscarProducto(item);
+
+                if (resultados.length > 0) {
+
+                    resultadosAgrupados.push({
+                        busqueda: item,
+                        resultados
+                    });
+                }
+            }
+
+            let contextoInventario = "";
+
+            if (resultadosAgrupados.length > 0) {
+
+                contextoInventario = "INVENTARIO ENCONTRADO:\n\n";
+
+                for (const grupo of resultadosAgrupados) {
+
+                    contextoInventario += `🔎 ${grupo.busqueda.toUpperCase()}\n`;
+
+                    grupo.resultados.forEach(p => {
+                        contextoInventario += `- ${p.nombre} | $${p.precio} | stock: ${p.stock}\n`;
+                    });
+
+                    contextoInventario += "\n";
+                }
+            }
+
+            const response = await askAI(userId, text, contextoInventario);
 
             await sock.sendMessage(userId, { text: response });
 
         } catch (err) {
-            console.error("❌ Error IA:", err);
+            console.error("❌ Error:", err);
         }
     });
 }
