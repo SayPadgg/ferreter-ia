@@ -10,7 +10,7 @@ import makeWASocket, {
 } from "@whiskeysockets/baileys";
 
 import P from "pino";
-import qrcode from "qrcode-terminal";
+import qr from "qr-terminal";
 
 dotenv.config();
 
@@ -88,9 +88,20 @@ async function startBot() {
         const { connection, lastDisconnect, qr } = update;
 
         if (qr) {
-            console.log("📱 Escanea este QR:");
-            qrcode.generate(qr, { small: true });
-        }
+
+    console.clear();
+
+    console.log("╔══════════════════════════════╗");
+    console.log("║     ESCANEA EL QR BELOW     ║");
+    console.log("╚══════════════════════════════╝");
+
+    qr.generate(qr, {
+        small: true
+    });
+
+    console.log("\n⚡ Si no se ve bien:");
+    console.log("➡️ Haz zoom OUT en Render (80% o 67%)");
+}
 
         if (connection === "open") {
             console.log("✅ Bot conectado correctamente");
