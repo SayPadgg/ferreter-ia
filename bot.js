@@ -1,6 +1,3 @@
-import { createRequire } from "module";
-const require = createRequire(import.meta.url);
-
 import express from "express";
 import dotenv from "dotenv";
 import Groq from "groq-sdk";
@@ -13,8 +10,7 @@ import makeWASocket, {
 } from "@whiskeysockets/baileys";
 
 import P from "pino";
-
-const qrcode = require("qrcode-terminal");
+import qrcode from "qrcode-terminal";
 
 dotenv.config();
 
@@ -33,14 +29,9 @@ async function askAI(userId, message) {
 
     if (!chatMemory[userId]) chatMemory[userId] = [];
 
-    chatMemory[userId].push({
-        role: "user",
-        content: message
-    });
+    chatMemory[userId].push({ role: "user", content: message });
 
-    if (chatMemory[userId].length > 10) {
-        chatMemory[userId].shift();
-    }
+    if (chatMemory[userId].length > 10) chatMemory[userId].shift();
 
     const completion = await groq.chat.completions.create({
         model: "llama-3.1-8b-instant",
@@ -52,10 +43,7 @@ async function askAI(userId, message) {
 
     const reply = completion.choices[0].message.content;
 
-    chatMemory[userId].push({
-        role: "assistant",
-        content: reply
-    });
+    chatMemory[userId].push({ role: "assistant", content: reply });
 
     return reply;
 }
@@ -81,11 +69,8 @@ let restarting = false;
 
 async function startBot() {
 
-    const { state, saveCreds } =
-        await useMultiFileAuthState("auth");
-
-    const { version } =
-        await fetchLatestBaileysVersion();
+    const { state, saveCreds } = await useMultiFileAuthState("auth");
+    const { version } = await fetchLatestBaileysVersion();
 
     const sock = makeWASocket({
         version,
@@ -100,53 +85,31 @@ async function startBot() {
     // =======================
     sock.ev.on("connection.update", (update) => {
 
-        const {
-            connection,
-            lastDisconnect,
-            qr: qrCode
-        } = update;
+        const { connection, lastDisconnect, qr } = update;
 
-        if (qrCode) {
-
-            console.clear();
-
-            console.log("╔══════════════════════════════╗");
-            console.log("║      ESCANEA ESTE QR        ║");
-            console.log("╚══════════════════════════════╝");
-
-            qrcode.generate(qrCode, {
-                small: true
-            });
-
-            console.log("\n⚡ Zoom recomendado en Render: 80%");
+        if (qr) {
+            console.log("📱 ESCANEA ESTE QR:");
+            qrcode.generate(qr, { small: true });
         }
 
         if (connection === "open") {
-
             console.log("✅ Bot conectado correctamente");
-
             restarting = false;
         }
 
         if (connection === "close") {
 
             if (restarting) return;
-
             restarting = true;
 
-            const code =
-                lastDisconnect?.error?.output?.statusCode;
+            const code = lastDisconnect?.error?.output?.statusCode;
 
-            const shouldReconnect =
-                code !== DisconnectReason.loggedOut;
+            const shouldReconnect = code !== DisconnectReason.loggedOut;
 
             console.log("🔁 Reconectando:", shouldReconnect);
 
             if (shouldReconnect) {
-
-                setTimeout(() => {
-                    startBot();
-                }, 10000);
+                setTimeout(() => startBot(), 10000);
             }
         }
     });
@@ -175,16 +138,11 @@ async function startBot() {
         try {
 
             const userId = msg.key.remoteJid;
+            const response = await askAI(userId, text);
 
-            const response =
-                await askAI(userId, text);
-
-            await sock.sendMessage(userId, {
-                text: response
-            });
+            await sock.sendMessage(userId, { text: response });
 
         } catch (err) {
-
             console.error("❌ Error IA:", err);
         }
     });
