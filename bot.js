@@ -85,16 +85,17 @@ async function startBot() {
     // =======================
     sock.ev.on("connection.update", (update) => {
 
-        const { connection, lastDisconnect, qr } = update;
+        const { connection, lastDisconnect, qr: qrCode } = update;
 
-        if (qr) {
+        if (qrCode) {
+
             console.clear();
 
             console.log("╔══════════════════════════════╗");
             console.log("║     ESCANEA EL QR BELOW     ║");
             console.log("╚══════════════════════════════╝");
 
-            qr.generate(qr, {
+            qr.generate(qrCode, {
                 small: true
             });
 
