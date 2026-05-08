@@ -8,7 +8,7 @@ import pino from "pino";
 import dotenv from "dotenv";
 
 import { obtenerInventario } from "./services/sheetsService.js";
-import { detectarMaterialesIA } from "./services/aiservices.js";
+import { detectarMaterialesIA } from "./services/aiService.js";
 import { normalizarTexto, singularizar } from "./utils/text.js";
 
 dotenv.config();
