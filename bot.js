@@ -1,240 +1,86 @@
-import express from "express";
-import dotenv from "dotenv";
-import Groq from "groq-sdk";
-import fs from "fs";
+const { Client, LocalAuth } = require("whatsapp-web.js");
+const qrcode = require("qrcode-terminal");
 
-import makeWASocket, {
-    useMultiFileAuthState,
-    DisconnectReason,
-    fetchLatestBaileysVersion
-} from "@whiskeysockets/baileys";
+const { obtenerInventario } = require("./services/sheetsService");
+const { detectarMaterialesIA } = require("./services/aiService");
+const {
+    normalizarTexto,
+    singularizar
+} = require("./utils/text");
 
-import P from "pino";
-import qrcode from "qrcode-terminal";
-
-import { buscarProducto } from "./services/sheetsService.js";
-
-dotenv.config();
-
-// =======================
-// IA
-// =======================
-const groq = new Groq({
-    apiKey: process.env.GROQ_API_KEY
+const client = new Client({
+    authStrategy: new LocalAuth()
 });
 
-const systemPrompt = fs.readFileSync("prompt.txt", "utf-8");
-
-const chatMemory = {};
-
-// =======================
-// EXTRACTOR IA DE PRODUCTOS
-// =======================
-async function extraerProductosConIA(texto) {
-
-    const res = await groq.chat.completions.create({
-        model: "llama-3.1-8b-instant",
-        messages: [
-            {
-                role: "system",
-                content:
-                    "Eres un extractor de productos de ferretería. " +
-                    "Devuelve SOLO una lista separada por comas de los productos mencionados. " +
-                    "Ejemplo: cemento, pintura, brocha. " +
-                    "No expliques nada."
-            },
-            {
-                role: "user",
-                content: texto
-            }
-        ]
-    });
-
-    return res.choices[0].message.content
-        .toLowerCase()
-        .split(",")
-        .map(p => p.trim())
-        .filter(Boolean);
-}
-
-// =======================
-// IA RESPUESTA FINAL
-// =======================
-async function askAI(userId, message, contextoInventario) {
-
-    if (!chatMemory[userId]) chatMemory[userId] = [];
-
-    chatMemory[userId].push({ role: "user", content: message });
-
-    if (chatMemory[userId].length > 10) chatMemory[userId].shift();
-
-    const completion = await groq.chat.completions.create({
-        model: "llama-3.1-8b-instant",
-        messages: [
-            {
-                role: "system",
-                content: systemPrompt + "\n\n" + contextoInventario
-            },
-            ...chatMemory[userId]
-        ]
-    });
-
-    const reply = completion.choices[0].message.content;
-
-    chatMemory[userId].push({ role: "assistant", content: reply });
-
-    return reply;
-}
-
-// =======================
-// EXPRESS
-// =======================
-const app = express();
-const PORT = process.env.PORT || 10000;
-
-app.get("/", (_, res) => {
-    res.send("Bot activo 🤖");
+client.on("qr", qr => {
+    qrcode.generate(qr, { small: true });
 });
 
-app.listen(PORT, () => {
-    console.log("🌐 Server running on", PORT);
+client.on("ready", () => {
+    console.log("🤖 Bot conectado");
 });
 
-// =======================
-// BOT
-// =======================
-let restarting = false;
+client.on("message", async message => {
 
-async function startBot() {
+    const texto = message.body.trim();
+    console.log("📩 Mensaje:", texto);
 
-    const { state, saveCreds } =
-        await useMultiFileAuthState("auth");
+    const inventario = await obtenerInventario();
 
-    const { version } =
-        await fetchLatestBaileysVersion();
+    // 🔥 DETECTAR PRODUCTOS (IA CONTROLADA)
+    const materiales = await detectarMaterialesIA(texto);
 
-    const sock = makeWASocket({
-        version,
-        auth: state,
-        logger: P({ level: "silent" })
-    });
+    console.log("🔍 Detectados:", materiales);
 
-    sock.ev.on("creds.update", saveCreds);
+    // =========================
+    // SI HAY PRODUCTOS
+    // =========================
+    if (materiales.length > 0) {
 
-    // =======================
-    // CONEXIÓN
-    // =======================
-    sock.ev.on("connection.update", (update) => {
+        for (const material of materiales) {
 
-        const {
-            connection,
-            lastDisconnect,
-            qr
-        } = update;
+            const matNorm =
+                singularizar(normalizarTexto(material));
 
-        if (qr) {
-            console.log("📱 ESCANEA ESTE QR:");
-            qrcode.generate(qr, { small: true });
-        }
+            let variantes = inventario.filter(i => {
 
-        if (connection === "open") {
-            console.log("✅ Bot conectado correctamente");
-            restarting = false;
-        }
+                const prodNorm =
+                    singularizar(normalizarTexto(i.Producto || ""));
 
-        if (connection === "close") {
-
-            if (restarting) return;
-            restarting = true;
-
-            const code =
-                lastDisconnect?.error?.output?.statusCode;
-
-            const shouldReconnect =
-                code !== DisconnectReason.loggedOut;
-
-            console.log("🔁 Reconectando:", shouldReconnect);
-
-            if (shouldReconnect) {
-                setTimeout(() => startBot(), 10000);
-            }
-        }
-    });
-
-    // =======================
-    // MENSAJES
-    // =======================
-    sock.ev.on("messages.upsert", async ({ messages }) => {
-
-        const msg = messages[0];
-
-        if (!msg.message) return;
-        if (msg.key.fromMe) return;
-        if (msg.key.remoteJid === "status@broadcast") return;
-
-        const text =
-            msg.message.conversation ||
-            msg.message.extendedTextMessage?.text ||
-            msg.message.imageMessage?.caption ||
-            msg.message.videoMessage?.caption;
-
-        if (!text) return;
-
-        console.log("📩 Mensaje:", text);
-
-        try {
-
-            const userId = msg.key.remoteJid;
-
-            // 🔥 EXTRACCIÓN INTELIGENTE
-            const items = await extraerProductosConIA(text);
-
-            console.log("🔍 Productos detectados:", items);
-
-            let resultadosAgrupados = [];
-
-            for (const item of items) {
-
-                const resultados = await buscarProducto(item);
-
-                if (resultados.length > 0) {
-
-                    resultadosAgrupados.push({
-                        busqueda: item,
-                        resultados
-                    });
-                }
-            }
-
-            let contextoInventario = "";
-
-            if (resultadosAgrupados.length > 0) {
-
-                contextoInventario = "INVENTARIO ENCONTRADO:\n\n";
-
-                for (const grupo of resultadosAgrupados) {
-
-                    contextoInventario += `🔎 ${grupo.busqueda.toUpperCase()}\n`;
-
-                    grupo.resultados.forEach(p => {
-                        contextoInventario += `- ${p.nombre} | $${p.precio} | stock: ${p.stock}\n`;
-                    });
-
-                    contextoInventario += "\n";
-                }
-            }
-
-            const response =
-                await askAI(userId, text, contextoInventario);
-
-            await sock.sendMessage(userId, {
-                text: response
+                return prodNorm.includes(matNorm);
             });
 
-        } catch (err) {
-            console.error("❌ Error:", err);
-        }
-    });
-}
+            if (variantes.length === 0) {
 
-startBot();
+                await message.reply(
+                    `❌ No encontré "${material}" en el inventario.`
+                );
+
+                continue;
+            }
+
+            let respuesta = `📌 Resultados para "${material}"\n\n`;
+
+            variantes.forEach(item => {
+
+                respuesta +=
+`📦 ${item.Producto}
+💰 Precio: $${item.Precio}
+📊 Stock: ${item.StockSucursal1 || 0}
+
+`;
+            });
+
+            await message.reply(respuesta.trim());
+        }
+
+        return;
+    }
+
+    // =========================
+    // SI NO HAY PRODUCTOS → IA NORMAL
+    // =========================
+    await message.reply("¿En qué te puedo ayudar con materiales de ferretería?");
+});
+
+client.initialize();
