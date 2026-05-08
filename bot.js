@@ -1,3 +1,6 @@
+import { createRequire } from "module";
+const require = createRequire(import.meta.url);
+
 import express from "express";
 import dotenv from "dotenv";
 import Groq from "groq-sdk";
@@ -10,7 +13,8 @@ import makeWASocket, {
 } from "@whiskeysockets/baileys";
 
 import P from "pino";
-import { generate } from "qr-terminal";
+
+const qrcode = require("qrcode-terminal");
 
 dotenv.config();
 
@@ -29,9 +33,14 @@ async function askAI(userId, message) {
 
     if (!chatMemory[userId]) chatMemory[userId] = [];
 
-    chatMemory[userId].push({ role: "user", content: message });
+    chatMemory[userId].push({
+        role: "user",
+        content: message
+    });
 
-    if (chatMemory[userId].length > 10) chatMemory[userId].shift();
+    if (chatMemory[userId].length > 10) {
+        chatMemory[userId].shift();
+    }
 
     const completion = await groq.chat.completions.create({
         model: "llama-3.1-8b-instant",
@@ -43,13 +52,16 @@ async function askAI(userId, message) {
 
     const reply = completion.choices[0].message.content;
 
-    chatMemory[userId].push({ role: "assistant", content: reply });
+    chatMemory[userId].push({
+        role: "assistant",
+        content: reply
+    });
 
     return reply;
 }
 
 // =======================
-// EXPRESS (KEEP ALIVE BASE)
+// EXPRESS
 // =======================
 const app = express();
 const PORT = process.env.PORT || 10000;
@@ -69,8 +81,11 @@ let restarting = false;
 
 async function startBot() {
 
-    const { state, saveCreds } = await useMultiFileAuthState("auth");
-    const { version } = await fetchLatestBaileysVersion();
+    const { state, saveCreds } =
+        await useMultiFileAuthState("auth");
+
+    const { version } =
+        await fetchLatestBaileysVersion();
 
     const sock = makeWASocket({
         version,
@@ -85,34 +100,42 @@ async function startBot() {
     // =======================
     sock.ev.on("connection.update", (update) => {
 
-        const { connection, lastDisconnect, qr: qrCode } = update;
+        const {
+            connection,
+            lastDisconnect,
+            qr: qrCode
+        } = update;
 
         if (qrCode) {
 
             console.clear();
 
             console.log("╔══════════════════════════════╗");
-            console.log("║     ESCANEA EL QR BELOW     ║");
+            console.log("║      ESCANEA ESTE QR        ║");
             console.log("╚══════════════════════════════╝");
 
-            generate(qrCode, {
+            qrcode.generate(qrCode, {
                 small: true
             });
-            console.log("\n⚡ Si no se ve bien:");
-            console.log("➡️ Haz zoom OUT en Render (80% o 67%)");
+
+            console.log("\n⚡ Zoom recomendado en Render: 80%");
         }
 
         if (connection === "open") {
+
             console.log("✅ Bot conectado correctamente");
+
             restarting = false;
         }
 
         if (connection === "close") {
 
             if (restarting) return;
+
             restarting = true;
 
-            const code = lastDisconnect?.error?.output?.statusCode;
+            const code =
+                lastDisconnect?.error?.output?.statusCode;
 
             const shouldReconnect =
                 code !== DisconnectReason.loggedOut;
@@ -120,6 +143,7 @@ async function startBot() {
             console.log("🔁 Reconectando:", shouldReconnect);
 
             if (shouldReconnect) {
+
                 setTimeout(() => {
                     startBot();
                 }, 10000);
@@ -149,12 +173,18 @@ async function startBot() {
         console.log("📩 Mensaje:", text);
 
         try {
-            const userId = msg.key.remoteJid;
-            const response = await askAI(userId, text);
 
-            await sock.sendMessage(userId, { text: response });
+            const userId = msg.key.remoteJid;
+
+            const response =
+                await askAI(userId, text);
+
+            await sock.sendMessage(userId, {
+                text: response
+            });
 
         } catch (err) {
+
             console.error("❌ Error IA:", err);
         }
     });
