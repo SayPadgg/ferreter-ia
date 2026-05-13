@@ -1,13 +1,10 @@
 export function normalizarTexto(texto = "") {
+
     return texto
         .toLowerCase()
         .normalize("NFD")
-        .replace(/[\u0300-\u036f]/g, "")
+        .replace(/[\u0300-\u036f]/g, "") // acentos
+        .replace(/[^a-z0-9\s]/g, "")     // símbolos
+        .replace(/\s+/g, " ")
         .trim();
-}
-
-export function singularizar(palabra = "") {
-    if (palabra.endsWith("es")) return palabra.slice(0, -2);
-    if (palabra.endsWith("s")) return palabra.slice(0, -1);
-    return palabra;
 }

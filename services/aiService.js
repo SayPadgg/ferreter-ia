@@ -1,10 +1,13 @@
+import dotenv from "dotenv";
+dotenv.config();
+
 import Groq from "groq-sdk";
 
 const groq = new Groq({
     apiKey: process.env.GROQ_API_KEY
 });
 
-export async function detectarMaterialesIA(texto) {
+export async function detectarIntencion(texto) {
 
     try {
 
@@ -14,19 +17,34 @@ export async function detectarMaterialesIA(texto) {
                 {
                     role: "system",
                     content: `
-Eres un extractor de materiales de ferretería.
+Eres un clasificador de intención para un bot de ferretería.
 
-REGLAS:
-- SOLO devuelve un array JSON válido
-- SIN texto adicional
-- SIN explicaciones
-- NO inventes productos
+CATEGORÍAS:
+1. chat → saludos, conversación, preguntas generales
+2. material → productos, precios, stock, disponibilidad
+
+REGLAS ESTRICTAS:
+- SOLO JSON válido
+- NO reformules palabras
+- NO completes nombres
+- SOLO usa palabras EXACTAS del usuario
 
 FORMATO:
-["cemento","pintura"]
 
-Si no hay materiales:
-[]
+CHAT:
+{"type":"chat"}
+
+MATERIAL:
+{"type":"material","materials":["cemento"]}
+
+Ejemplos:
+
+"hola" → {"type":"chat"}
+"cómo estás" → {"type":"chat"}
+"pintura blanca" → {"type":"material","materials":["pintura blanca"]}
+"bloque" → {"type":"material","materials":["bloque"]}
+
+Si no estás seguro → chat
 `
                 },
                 {
@@ -37,24 +55,27 @@ Si no hay materiales:
             temperature: 0
         });
 
-        let content = res.choices[0].message.content;
-
-        // limpieza anti-errores
-        content = content
+        let content = res.choices[0].message.content
             .replace(/```json/g, "")
             .replace(/```/g, "")
-            .replace(/Respuesta:/g, "")
             .trim();
 
-        // extraer SOLO el array real
-        const match = content.match(/\[[\s\S]*?\]/);
+        const match = content.match(/\{[\s\S]*\}/);
 
-        if (!match) return [];
+        if (!match) return { type: "chat" };
 
-        return JSON.parse(match[0]);
+        const result = JSON.parse(match[0]);
+
+        if (!result.type) return { type: "chat" };
+
+        if (result.type === "material" && !Array.isArray(result.materials)) {
+            result.materials = [];
+        }
+
+        return result;
 
     } catch (err) {
-        console.log("AI error:", err);
-        return [];
+        console.log("Router error:", err);
+        return { type: "chat" };
     }
 }

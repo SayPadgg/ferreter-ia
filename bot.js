@@ -1,3 +1,9 @@
+import dotenv from "dotenv";
+dotenv.config();
+
+import fs from "fs";
+import Groq from "groq-sdk";
+
 import makeWASocket, {
     useMultiFileAuthState,
     fetchLatestBaileysVersion,
@@ -8,13 +14,24 @@ import P from "pino";
 import qrcode from "qrcode-terminal";
 
 import { obtenerInventario } from "./services/sheetsService.js";
-import { detectarMaterialesIA } from "./services/aiService.js";
-import { normalizarTexto, singularizar } from "./utils/text.js";
+import { detectarIntencion } from "./services/aiRouter.js";
+import { normalizarTexto } from "./utils/text.js";
 
-import dotenv from "dotenv";
-dotenv.config();
+const groq = new Groq({
+    apiKey: process.env.GROQ_API_KEY
+});
 
-let restarting = false;
+const prompt = fs.readFileSync("./prompt.txt", "utf-8");
+
+// =========================
+// LOG + SEND
+// =========================
+async function sendAndLog(sock, userId, message) {
+    console.log("🤖 RESPUESTA BOT:");
+    console.log(message.text || message);
+
+    return sock.sendMessage(userId, message);
+}
 
 async function startBot() {
 
@@ -70,61 +87,121 @@ async function startBot() {
 
         console.log("📩 Mensaje:", text);
 
-        const inventario = await obtenerInventario();
+        const decision = await detectarIntencion(text);
 
-        let materiales = await detectarMaterialesIA(text);
-
-        console.log("🔍 IA detectó:", materiales);
-
-        // 🔥 FILTRO REAL CONTRA INVENTARIO
-        const inventarioNormalizado = inventario.map(i => ({
-            ...i,
-            norm: normalizarTexto(i.Producto || "")
-        }));
-
-        const materialesValidos = materiales.filter(m =>
-            inventarioNormalizado.some(i =>
-                i.norm.includes(normalizarTexto(m))
-            )
-        );
-
-        console.log("✅ Materiales válidos:", materialesValidos);
+        console.log("🧠 INTENCIÓN:", decision);
 
         // =========================
-        // SI HAY RESULTADOS
+        // CHAT
         // =========================
-        if (materialesValidos.length > 0) {
+        if (decision.type === "chat") {
 
-            for (const material of materialesValidos) {
+            const res = await groq.chat.completions.create({
+                model: "llama-3.1-8b-instant",
+                messages: [
+                    { role: "system", content: prompt },
+                    { role: "user", content: text }
+                ],
+                temperature: 0.3
+            });
 
-                const matNorm = normalizarTexto(material);
+            const reply = res.choices[0].message.content;
 
-                const resultados = inventario.filter(i =>
-                    normalizarTexto(i.Producto || "").includes(matNorm)
-                );
-
-                let reply = `📌 Resultados para "${material}"\n\n`;
-
-                resultados.forEach(p => {
-                    reply += `📦 ${p.Producto}
-💰 $${p.Precio}
-📊 Stock: ${p.StockSucursal1 || 0}
-
-`;
-                });
-
-                await sock.sendMessage(userId, { text: reply });
-            }
+            await sendAndLog(sock, userId, { text: reply });
 
             return;
         }
 
         // =========================
-        // SI NO HAY MATERIAL
+        // MATERIAL SEARCH FIXED
         // =========================
-        await sock.sendMessage(userId, {
-            text: "Hola 👋 dime qué material necesitas de ferretería"
-        });
+        if (decision.type === "material") {
+
+            const inventario = await obtenerInventario();
+
+            const materiales = decision.materials || [];
+
+            const materialesNorm = [...new Set(
+                materiales.map(m => normalizarTexto(m))
+            )];
+
+            console.log("🔎 Buscando:", materialesNorm);
+
+            let reply = "";
+            let totalGlobal = 0;
+
+            for (const mat of materialesNorm) {
+
+                // 🔥 FIX IMPORTANTE: NO cruzar materiales entre sí
+                const resultados = inventario.filter(i => {
+
+                    const prod = normalizarTexto(i.Producto || "");
+
+                   return (
+                        prod.includes(mat) ||
+                        mat.includes(prod) ||
+                        prod.split(" ").some(w => mat.includes(w)) ||
+                        mat.split(" ").some(w => prod.includes(w))
+                    );
+                });
+
+                console.log(`📦 ${mat} → ${resultados.length}`);
+
+                if (resultados.length === 0) {
+                    reply += `\n❌ ${mat.toUpperCase()}\nNo encontrado en inventario 🔧\n`;
+                    continue;
+                }
+
+                totalGlobal += resultados.length;
+
+                reply += `\n━━━━━━━━━━━━━━━\n`;
+                reply += `📦 ${mat.toUpperCase()}\n`;
+                reply += `━━━━━━━━━━━━━━━\n\n`;
+
+                const conStock = resultados.filter(p => (p.StockSucursal1 || 0) > 0);
+                const sinStock = resultados.filter(p => (p.StockSucursal1 || 0) <= 0);
+
+                if (conStock.length > 0) {
+
+                    reply += `🟢 DISPONIBLES:\n\n`;
+
+                    conStock.forEach(p => {
+                        reply += `📦 ${p.Producto}
+💰 $${p.Precio}
+📊 Stock: ${p.StockSucursal1 || 0}
+
+`;
+                    });
+                }
+
+                if (sinStock.length > 0) {
+
+                    reply += `⚠️ SIN STOCK:\n\n`;
+
+                    sinStock.forEach(p => {
+                        reply += `📦 ${p.Producto}
+💰 $${p.Precio}
+📊 0 unidades ❌
+
+`;
+                    });
+                }
+            }
+
+            if (totalGlobal === 0) {
+
+                await sendAndLog(sock, userId, {
+                    text: "No encontré ninguno de los productos solicitados 🔧"
+                });
+
+                return;
+            }
+
+            await sendAndLog(sock, userId, { text: reply });
+
+            return;
+        }
+
     });
 }
 
