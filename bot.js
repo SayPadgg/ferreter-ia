@@ -24,7 +24,7 @@ const groq = new Groq({
 const prompt = fs.readFileSync("./prompt.txt", "utf-8");
 
 // =========================
-// LOG + SEND
+// SEND
 // =========================
 async function sendAndLog(sock, userId, message) {
     console.log("🤖 RESPUESTA BOT:");
@@ -33,6 +33,9 @@ async function sendAndLog(sock, userId, message) {
     return sock.sendMessage(userId, message);
 }
 
+// =========================
+// BOT START
+// =========================
 async function startBot() {
 
     const { state, saveCreds } = await useMultiFileAuthState("auth");
@@ -46,12 +49,13 @@ async function startBot() {
 
     sock.ev.on("creds.update", saveCreds);
 
+    // CONNECTION
     sock.ev.on("connection.update", (update) => {
 
         const { connection, lastDisconnect, qr } = update;
 
         if (qr) {
-            console.log("📱 ESCANEA ESTE QR:");
+            console.log("📱 ESCANEA QR:");
             qrcode.generate(qr, { small: true });
         }
 
@@ -62,7 +66,8 @@ async function startBot() {
         if (connection === "close") {
 
             const code = lastDisconnect?.error?.output?.statusCode;
-            const shouldReconnect = code !== DisconnectReason.loggedOut;
+            const shouldReconnect =
+                code !== DisconnectReason.loggedOut;
 
             console.log("🔁 Reconectando:", shouldReconnect);
 
@@ -72,6 +77,9 @@ async function startBot() {
         }
     });
 
+    // =========================
+    // MESSAGES
+    // =========================
     sock.ev.on("messages.upsert", async ({ messages }) => {
 
         const msg = messages[0];
@@ -113,7 +121,7 @@ async function startBot() {
         }
 
         // =========================
-        // MATERIAL SEARCH FIXED
+        // MATERIAL SEARCH
         // =========================
         if (decision.type === "material") {
 
@@ -121,9 +129,13 @@ async function startBot() {
 
             const materiales = decision.materials || [];
 
-            const materialesNorm = [...new Set(
-                materiales.map(m => normalizarTexto(m))
-            )];
+            const materialesNorm = [
+                ...new Set(
+                    materiales
+                        .map(m => normalizarTexto(m))
+                        .filter(Boolean)
+                )
+            ];
 
             console.log("🔎 Buscando:", materialesNorm);
 
@@ -132,66 +144,64 @@ async function startBot() {
 
             for (const mat of materialesNorm) {
 
-                // 🔥 FIX IMPORTANTE: NO cruzar materiales entre sí
-                const resultados = inventario.filter(i => {
+                // 🔥 MATCH MEJORADO (tipo ranking simple)
+                const resultados = inventario
+                    .map(i => {
 
-                    const prod = normalizarTexto(i.Producto || "");
+                        const prod = normalizarTexto(i.Producto || "");
+                        const palabras = mat.split(" ");
 
-                   return (
-                        prod.includes(mat) ||
-                        mat.includes(prod) ||
-                        prod.split(" ").some(w => mat.includes(w)) ||
-                        mat.split(" ").some(w => prod.includes(w))
-                    );
-                });
+                        let score = 0;
+
+                        palabras.forEach(p => {
+                            if (prod.includes(p)) score++;
+                        });
+
+                        return { item: i, score };
+                    })
+                    .filter(r => r.score > 0)
+                    .sort((a, b) => b.score - a.score)
+                    .map(r => r.item);
 
                 console.log(`📦 ${mat} → ${resultados.length}`);
 
                 if (resultados.length === 0) {
-                    reply += `\n❌ ${mat.toUpperCase()}\nNo encontrado en inventario 🔧\n`;
+
+                    reply += `
+❌ ${mat.toUpperCase()}
+No encontrado en inventario 🔧
+
+`;
                     continue;
                 }
 
                 totalGlobal += resultados.length;
 
-                reply += `\n━━━━━━━━━━━━━━━\n`;
-                reply += `📦 ${mat.toUpperCase()}\n`;
-                reply += `━━━━━━━━━━━━━━━\n\n`;
+                reply += `
+━━━━━━━━━━━━━━━
+📦 ${mat.toUpperCase()}
+━━━━━━━━━━━━━━━
 
-                const conStock = resultados.filter(p => (p.StockSucursal1 || 0) > 0);
-                const sinStock = resultados.filter(p => (p.StockSucursal1 || 0) <= 0);
-
-                if (conStock.length > 0) {
-
-                    reply += `🟢 DISPONIBLES:\n\n`;
-
-                    conStock.forEach(p => {
-                        reply += `📦 ${p.Producto}
-💰 $${p.Precio}
-📊 Stock: ${p.StockSucursal1 || 0}
+🟢 DISPONIBLES:
 
 `;
-                    });
-                }
 
-                if (sinStock.length > 0) {
+                resultados.forEach(p => {
 
-                    reply += `⚠️ SIN STOCK:\n\n`;
-
-                    sinStock.forEach(p => {
-                        reply += `📦 ${p.Producto}
+                    reply +=
+`📦 ${p.Producto}
 💰 $${p.Precio}
-📊 0 unidades ❌
+🏪 Sucursal 1: ${p.StockSucursal1 || 0}
+🏪 Sucursal 2: ${p.StockSucursal2 || 0}
 
 `;
-                    });
-                }
+                });
             }
 
             if (totalGlobal === 0) {
 
                 await sendAndLog(sock, userId, {
-                    text: "No encontré ninguno de los productos solicitados 🔧"
+                    text: "No encontré productos relacionados 🔧"
                 });
 
                 return;

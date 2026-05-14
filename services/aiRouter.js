@@ -1,5 +1,6 @@
 import Groq from "groq-sdk";
 import dotenv from "dotenv";
+
 dotenv.config();
 
 const groq = new Groq({
@@ -8,61 +9,73 @@ const groq = new Groq({
 
 export async function detectarIntencion(texto) {
 
+    const textoLower = texto.toLowerCase().trim();
+
     try {
 
-        const res = await groq.chat.completions.create({
+        const completion = await groq.chat.completions.create({
             model: "llama-3.1-8b-instant",
+            temperature: 0,
             messages: [
                 {
                     role: "system",
                     content: `
-Eres un clasificador de mensajes.
-
-DEVUELVE SOLO JSON VÁLIDO.
-
-FORMATOS POSIBLES:
-
-1) CHAT:
-{"type":"chat"}
-
-2) MATERIAL:
-{"type":"material","materials":["cemento","arena"]}
+Eres un clasificador de intención para una ferretería.
 
 REGLAS:
-- NO texto adicional
-- NO explicaciones
-- NO markdown
-- SOLO JSON
+
+1. Si el mensaje menciona productos, materiales, herramientas o disponibilidad, devuelve:
+{
+"type":"material",
+"materials":["producto detectado"]
+}
+
+Ejemplos:
+"tienen pintura?" → material
+"hay cemento?" → material
+"precio de brocha" → material
+"buenas noches, tendrá pintura disponible?" → material
+
+2. Solo devuelve:
+{
+"type":"chat"
+}
+
+si es conversación pura.
+
+Ejemplos:
+"hola"
+"cómo estás"
+"gracias"
+
+RESPONDE SOLO JSON VÁLIDO.
 `
                 },
                 {
                     role: "user",
-                    content: texto
+                    content: textoLower
                 }
-            ],
-            temperature: 0
+            ]
         });
 
-        let content = res.choices[0].message.content.trim();
+        const raw = completion.choices[0].message.content.trim();
 
-        // 🔥 LIMPIEZA FUERTE
-        content = content
-            .replace(/```json/g, "")
-            .replace(/```/g, "")
-            .trim();
+        const parsed = JSON.parse(raw);
 
-        // 🔥 EXTRAER SOLO JSON REAL
-        const jsonMatch = content.match(/\{[\s\S]*\}/);
-
-        if (!jsonMatch) {
-            return { type: "chat" };
+        // Seguridad extra:
+        if (
+            parsed.type === "material" &&
+            Array.isArray(parsed.materials) &&
+            parsed.materials.length > 0
+        ) {
+            return parsed;
         }
 
-        return JSON.parse(jsonMatch[0]);
+        return { type: "chat" };
 
     } catch (err) {
 
-        console.log("Router AI error:", err);
+        console.log("⚠️ Error router IA:", err.message);
 
         return { type: "chat" };
     }
