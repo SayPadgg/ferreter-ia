@@ -2,6 +2,7 @@ import dotenv from "dotenv";
 dotenv.config();
 
 import fs from "fs";
+import express from "express";
 import Groq from "groq-sdk";
 
 import makeWASocket, {
@@ -22,6 +23,21 @@ const groq = new Groq({
 });
 
 const prompt = fs.readFileSync("./prompt.txt", "utf-8");
+
+// =========================
+// EXPRESS (Render Healthcheck)
+// =========================
+const app = express();
+
+app.get("/", (req, res) => {
+    res.send("MisopBot activo");
+});
+
+const PORT = process.env.PORT || 3000;
+
+app.listen(PORT, () => {
+    console.log(`🌐 Servidor escuchando en puerto ${PORT}`);
+});
 
 // =========================
 // SEND
@@ -144,7 +160,6 @@ async function startBot() {
 
             for (const mat of materialesNorm) {
 
-                // 🔥 MATCH MEJORADO (tipo ranking simple)
                 const resultados = inventario
                     .map(i => {
 
